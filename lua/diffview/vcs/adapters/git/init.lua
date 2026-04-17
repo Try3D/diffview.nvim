@@ -1663,6 +1663,16 @@ function GitAdapter:add_files(paths)
   return code == 0
 end
 
+function GitAdapter:apply_patch(patch_text, reverse)
+  local args = { "apply", "--cached", "--whitespace=nowarn" }
+  if reverse then args[#args + 1] = "--reverse" end
+  local _, code, err = self:exec_sync(args, {
+    cwd = self.ctx.toplevel,
+    writer = patch_text,
+  })
+  return code == 0, err
+end
+
 ---Check whether untracked files should be listed.
 ---@param opt? VCSAdapter.show_untracked.Opt
 ---@return boolean

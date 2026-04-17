@@ -10,6 +10,74 @@ local vcs_utils = lazy.require("diffview.vcs.utils") ---@module "diffview.vcs.ut
 local api = vim.api
 local await = async.await
 
+---Build a patch string from raw `git diff` output containing only hunks that
+---overlap [line_start, line_end]. When use_old_coords is true the old-file
+---line numbers are used for the overlap check (staged context); otherwise
+---the new-file line numbers are used (working-tree context).
+---@param diff_lines string[]
+---@param line_start integer
+---@param line_end integer
+---@param use_old_coords boolean
+---@return string?
+local function build_hunk_patch(diff_lines, line_start, line_end, use_old_coords)
+  local header = {}
+  local i = 1
+
+  -- Advance to the file header (--- / +++ lines)
+  while i <= #diff_lines and not diff_lines[i]:match("^%-%-%-") do
+    i = i + 1
+  end
+  if i > #diff_lines then return nil end
+  header[1] = diff_lines[i]
+  header[2] = diff_lines[i + 1] or ""
+  i = i + 2
+
+  local matching = {}
+
+  while i <= #diff_lines do
+    local line = diff_lines[i]
+    local old_row, old_size, new_row, new_size =
+      line:match("^@@ %-(%d+),(%d+) %+(%d+),(%d+) @@")
+
+    if old_row then
+      old_row   = tonumber(old_row)
+      old_size  = tonumber(old_size)
+      new_row   = tonumber(new_row)
+      new_size  = tonumber(new_size)
+
+      local hunk_lines = { line }
+      i = i + 1
+
+      while i <= #diff_lines
+        and not diff_lines[i]:match("^@@")
+        and not diff_lines[i]:match("^diff ")
+      do
+        hunk_lines[#hunk_lines + 1] = diff_lines[i]
+        i = i + 1
+      end
+
+      local hunk_start = use_old_coords and old_row   or new_row
+      local hunk_size  = use_old_coords and old_size  or new_size
+      local hunk_end   = hunk_start + hunk_size - 1
+
+      if line_start <= hunk_end and line_end >= hunk_start then
+        for _, l in ipairs(hunk_lines) do
+          matching[#matching + 1] = l
+        end
+      end
+    else
+      i = i + 1
+    end
+  end
+
+  if #matching == 0 then return nil end
+
+  local patch_lines = {}
+  for _, l in ipairs(header) do patch_lines[#patch_lines + 1] = l end
+  for _, l in ipairs(matching) do patch_lines[#patch_lines + 1] = l end
+  return table.concat(patch_lines, "\n") .. "\n"
+end
+
 ---@param view DiffView
 return function(view)
   return {
@@ -126,6 +194,55 @@ return function(view)
       if range then
         view.commit_log_panel:update(range)
       end
+    end,
+    stage_hunk = function()
+      if not (view.left.type == RevType.STAGE and view.right.type == RevType.LOCAL) then
+        return
+      end
+
+      local file = view.panel.cur_file
+      if not file or type(file.collapsed) == "boolean" then return end
+
+      local is_staged = file.kind == "staged"
+
+      local mode = vim.fn.mode()
+      local line_start, line_end
+      if mode == "v" or mode == "V" then
+        line_start = vim.fn.line("'<")
+        line_end   = vim.fn.line("'>")
+        api.nvim_feedkeys(vim.keycode("<Esc>"), "x", false)
+      else
+        local cursor = api.nvim_win_get_cursor(0)
+        line_start = cursor[1]
+        line_end   = cursor[1]
+      end
+
+      local diff_args = is_staged
+        and { "diff", "--cached", "--", file.path }
+        or  { "diff", "--", file.path }
+
+      local out, code = view.adapter:exec_sync(diff_args, view.adapter.ctx.toplevel)
+      if code ~= 0 or #out == 0 then
+        utils.err("No diff found for: " .. file.path)
+        return
+      end
+
+      local patch = build_hunk_patch(out, line_start, line_end, is_staged)
+      if not patch then
+        utils.err("No hunk at cursor position")
+        return
+      end
+
+      local ok, err = view.adapter:apply_patch(patch, is_staged)
+      if not ok then
+        utils.err(utils.vec_join("Failed to stage hunk:", err or {}))
+        return
+      end
+
+      view:update_files(vim.schedule_wrap(function()
+        view.panel:highlight_cur_file()
+      end))
+      view.emitter:emit(EventName.FILES_STAGED, view)
     end,
     toggle_stage_entry = function()
       if not (view.left.type == RevType.STAGE and view.right.type == RevType.LOCAL) then

@@ -152,6 +152,7 @@ M.defaults = {
     },
     diff2 = {
       -- Mappings in 2-way diff layouts
+      { { "n", "v" }, "gs", actions.stage_hunk, { desc = "Stage the hunk under the cursor / in the selection" } },
       { "n", "g?", actions.help({ "view", "diff2" }), { desc = "Open the help panel" } },
     },
     diff3 = {

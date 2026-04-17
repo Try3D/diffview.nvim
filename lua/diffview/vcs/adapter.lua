@@ -277,6 +277,14 @@ function VCSAdapter:reset_files(paths)
   oop.abstract_stub()
 end
 
+---Apply a patch to the index. Pass reverse=true to unstage.
+---@param patch_text string
+---@param reverse? boolean
+---@return boolean, string[]?
+function VCSAdapter:apply_patch(patch_text, reverse)
+  oop.abstract_stub()
+end
+
 ---@param argo ArgObject
 ---@return {left: string, right: string, options: string[]}
 function VCSAdapter:diffview_options(argo)

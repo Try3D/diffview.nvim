@@ -640,6 +640,7 @@ local action_names = {
   "select_next_commit",
   "select_prev_commit",
   "stage_all",
+  "stage_hunk",
   "toggle_files",
   "toggle_flatten_dirs",
   "toggle_fold",
