@@ -127,6 +127,10 @@ end
 
 ---@param args string[]
 function M.open(args)
+  local cur = lib.get_current_view()
+  if cur then
+    cur:close()
+  end
   local view = lib.diffview_open(args)
   if view then
     view:open()

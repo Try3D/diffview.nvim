@@ -214,8 +214,15 @@ File.create_buffer = async.wrap(function(self, callback)
     self.binary = self.adapter:is_binary(self.path, self.rev)
   end
 
-  if self.nulled or self.binary then
+  if self.nulled then
     self.bufnr = File._get_null_buffer()
+    self:post_buf_created()
+    callback(self.bufnr)
+    return
+  end
+
+  if self.binary then
+    self.bufnr = File._create_binary_buffer(self)
     self:post_buf_created()
     callback(self.bufnr)
     return
@@ -424,6 +431,123 @@ function File.safe_delete_buf(bufnr)
   end
 
   pcall(api.nvim_buf_delete, bufnr, { force = true })
+end
+
+---@param bn integer
+---@param abs_path string
+---@param rel_path string
+local function populate_binary_buffer(bn, abs_path, rel_path)
+  if not api.nvim_buf_is_valid(bn) then return end
+
+  local width, height = vim.o.columns, math.max(vim.o.lines - 4, 1)
+  for _, winid in ipairs(vim.fn.win_findbuf(bn)) do
+    width = api.nvim_win_get_width(winid)
+    height = api.nvim_win_get_height(winid)
+    break
+  end
+
+  local path_label = (abs_path ~= "" and abs_path) or rel_path
+  local max_path = width - 4
+  if #path_label > max_path then
+    path_label = "…" .. path_label:sub(-(max_path - 1))
+  end
+
+  local msg1 = "  Binary cannot be previewed  "
+  local msg2 = "  " .. path_label .. "  "
+  local mid = math.floor(height / 2)
+
+  local lines = {}
+  local msg_rows = {}
+
+  for i = 1, height do
+    if i == mid then
+      local pad = math.max(0, math.floor((width - #msg1) / 2))
+      table.insert(lines, string.rep(" ", pad) .. msg1 .. string.rep(" ", width - pad - #msg1))
+      table.insert(msg_rows, i)
+    elseif i == mid + 1 then
+      local pad = math.max(0, math.floor((width - #msg2) / 2))
+      table.insert(lines, string.rep(" ", pad) .. msg2 .. string.rep(" ", width - pad - #msg2))
+      table.insert(msg_rows, i)
+    else
+      local row = {}
+      for j = 1, width do
+        row[j] = (i + j) % 3 == 0 and "/" or " "
+      end
+      table.insert(lines, table.concat(row))
+    end
+  end
+
+  vim.bo[bn].modifiable = true
+  api.nvim_buf_set_lines(bn, 0, -1, false, lines)
+  vim.bo[bn].modifiable = false
+
+  api.nvim_buf_call(bn, function()
+    vim.cmd("syntax clear")
+    vim.cmd("syntax match DiffviewBinaryHatch +/+")
+  end)
+
+  local ns = api.nvim_create_namespace("diffview_binary")
+  api.nvim_buf_clear_namespace(bn, ns, 0, -1)
+  for _, row in ipairs(msg_rows) do
+    api.nvim_buf_add_highlight(bn, ns, "DiffviewBinaryMessage", row - 1, 0, -1)
+  end
+end
+
+---@static
+---@param file vcs.File
+---@return integer
+function File._create_binary_buffer(file)
+  local bufname = "diffview://binary/" .. file.path
+  local bn = utils.find_named_buffer(bufname)
+  if bn then return bn end
+
+  bn = api.nvim_create_buf(false, false)
+  local ok = pcall(api.nvim_buf_set_name, bn, bufname)
+  if not ok then
+    utils.wipe_named_buffer(bufname)
+    api.nvim_buf_set_name(bn, bufname)
+  end
+
+  for option, value in pairs(File.bufopts) do
+    api.nvim_buf_set_option(bn, option, value)
+  end
+
+  local abs_path = file.absolute_path or ""
+  local rel_path = file.path
+  local group = api.nvim_create_augroup("diffview_binary_" .. bn, { clear = true })
+
+  api.nvim_create_autocmd("BufWinEnter", {
+    buffer = bn,
+    group = group,
+    callback = function()
+      vim.schedule(function()
+        populate_binary_buffer(bn, abs_path, rel_path)
+      end)
+    end,
+  })
+
+  local resize_event = vim.fn.has("nvim-0.9") == 1 and "WinResized" or "VimResized"
+  api.nvim_create_autocmd(resize_event, {
+    group = group,
+    callback = function()
+      if #vim.fn.win_findbuf(bn) > 0 then
+        vim.schedule(function()
+          populate_binary_buffer(bn, abs_path, rel_path)
+        end)
+      end
+    end,
+  })
+
+  api.nvim_create_autocmd("BufWipeout", {
+    buffer = bn,
+    group = group,
+    once = true,
+    callback = function()
+      pcall(api.nvim_del_augroup_by_name, "diffview_binary_" .. bn)
+    end,
+  })
+
+  return bn
 end
 
 ---@static Get the bufid of the null buffer. Create it if it's not loaded.
