@@ -239,8 +239,12 @@ return function(view)
         return
       end
 
+      local cur_file = view.panel.cur_file
       view:update_files(vim.schedule_wrap(function()
         view.panel:highlight_cur_file()
+        if cur_file and utils.vec_indexof(view.panel:ordered_file_list(), cur_file) ~= -1 then
+          view:set_file(cur_file, false, false)
+        end
       end))
       view.emitter:emit(EventName.FILES_STAGED, view)
     end,
