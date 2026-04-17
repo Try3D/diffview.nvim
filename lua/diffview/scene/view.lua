@@ -62,7 +62,16 @@ function View:init(opt)
 end
 
 function View:open()
-  vim.cmd("tab split")
+  local wins = api.nvim_tabpage_list_wins(0)
+  local buf = api.nvim_win_get_buf(wins[1])
+  local is_empty_tab = #wins == 1
+    and vim.fn.bufname(buf) == ""
+    and not vim.bo[buf].modified
+
+  if not is_empty_tab then
+    vim.cmd("tab split")
+  end
+
   self.tabpage = api.nvim_get_current_tabpage()
   self:init_layout()
   self:post_open()
